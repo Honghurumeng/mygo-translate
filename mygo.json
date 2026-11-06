@@ -1,0 +1,10 @@
+{
+  "name": "MyGo 翻译",
+  "identifier": "com.rel001.mygo-translate",
+  "slug": "mygo-translate",
+  "version": "0.1.0",
+  "out": "build",
+  "linux": {
+    "webview": false
+  }
+}
