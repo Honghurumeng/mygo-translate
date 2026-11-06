@@ -1,7 +1,8 @@
-// Command icongen 画出应用图标：一块蓝色圆角方，中间一个白色的宋体「译」。
+// Command icongen 画出应用图标：一块纯色圆角方，中间一个白色的宋体「译」。
 //
 //	go run ./tools/icongen                 # 写 resources/icon.png
 //	go run ./tools/icongen -o /tmp/i.png   # 换个地方看效果
+//	go run ./tools/icongen -bg '#1f6feb'   # 换底色
 //
 // 所有形状都在 4 倍画布上画完再缩回 1024，圆角与笔画边缘都是干净的。
 // 字体用系统的 Songti SC（宋体），字形按墨迹外接框居中。
@@ -35,11 +36,11 @@ const (
 	ss = 4 // 超采样倍数
 )
 
-// style 是一张图的样子：渐变的两个端点，加上高光与字的比例。
+// style 是一张图的样子：纯色底，加上字的大小。
 type style struct {
-	top, bottom color.NRGBA
-	sheen       float64 // 顶部高光的 alpha
-	ink         float64 // 字墨迹的高度，相对图标边长
+	bg     color.NRGBA
+	ink    float64 // 字墨迹的高度，相对图标边长
+	shadow float64 // 字下方投影的 alpha（0 关闭）
 }
 
 func main() {
@@ -49,16 +50,14 @@ func main() {
 	fontFace := flag.String("face", "Songti SC Bold", "TTC 里的字体全名")
 	char := flag.String("char", "译", "中间的字")
 	ink := flag.Float64("ink", 0.43, "字的墨迹高度，相对图标边长")
-	sheen := flag.Float64("sheen", 0x38, "顶部高光的 alpha（0-255）")
-	topHex := flag.String("top", "#4c8dff", "渐变起点颜色")
-	bottomHex := flag.String("bottom", "#0b33a8", "渐变终点颜色")
+	bgHex := flag.String("bg", "#2b60d3", "底色（纯色，不渐变）")
+	tshadow := flag.Float64("tshadow", 0x4e, "字的投影 alpha（0 关闭）")
 	flag.Parse()
 
 	st := style{
-		top:    parseHex(*topHex),
-		bottom: parseHex(*bottomHex),
-		sheen:  *sheen,
+		bg:     parseHex(*bgHex),
 		ink:    *ink,
+		shadow: *tshadow,
 	}
 	img := resize(render(*fontPath, *fontFace, *char, st), *size)
 
@@ -90,32 +89,17 @@ func render(fontPath, faceName, char string, st style) *image.RGBA {
 	shadow := blur(body, 24*ss, 3)
 	paint(canvas, color.NRGBA{0x0a, 0x1c, 0x50, 0x66}, shadow, 0, 10*ss)
 
-	// 底色渐变，自上而下略向右倾。
-	draw.DrawMask(canvas, canvas.Bounds(),
-		gradient(n, st.top, st.bottom, 0.18, 1, inset, float64(n)-inset),
+	// 纯色底，一个颜色铺满，没有任何渐变或高光。
+	draw.DrawMask(canvas, canvas.Bounds(), image.NewUniform(st.bg),
 		image.Point{}, body, image.Point{}, draw.Src)
 
-	// 顶部一层白，像光从左上方打过来；底部压一点暗，别太扁平。
-	draw.DrawMask(canvas, canvas.Bounds(), image.NewUniform(color.NRGBA{0xff, 0xff, 0xff, 0xff}),
-		image.Point{}, intersect(verticalFade(n, inset, inset+0.5*(float64(n)-2*inset), st.sheen), body),
-		image.Point{}, draw.Over)
-	draw.DrawMask(canvas, canvas.Bounds(), image.NewUniform(color.NRGBA{0x00, 0x0a, 0x33, 0xff}),
-		image.Point{}, intersect(verticalFade(n, float64(n)-inset, float64(n)-inset-0.35*(float64(n)-2*inset), 0x30), body),
-		image.Point{}, draw.Over)
-
-	// 顶部一圈细高光，把边勾出来，缩到 Dock 尺寸时轮廓更清楚。
-	ring := subtract(body, roundedRect(n, inset+2.5*ss, float64(n)-inset-2.5*ss, radius-2.5*ss))
-	draw.DrawMask(canvas, canvas.Bounds(), image.NewUniform(color.NRGBA{0xff, 0xff, 0xff, 0xff}),
-		image.Point{}, intersect(verticalFade(n, inset, inset+0.42*(float64(n)-2*inset), 0x2e), ring),
-		image.Point{}, draw.Over)
-
-	drawChar(canvas, fontPath, faceName, char, st.ink)
+	drawChar(canvas, fontPath, faceName, char, st.ink, st.shadow)
 
 	return canvas
 }
 
-// drawChar 把汉字按墨迹外接框居中画到画布上。
-func drawChar(dst *image.RGBA, fontPath, faceName, char string, ink float64) {
+// drawChar 把汉字按墨迹外接框居中画到画布上，字下方带一层柔和的投影。
+func drawChar(dst *image.RGBA, fontPath, faceName, char string, ink, shadowAlpha float64) {
 	data, err := os.ReadFile(fontPath)
 	if err != nil {
 		log.Fatalf("读字体 %s: %v", fontPath, err)
@@ -145,9 +129,24 @@ func drawChar(dst *image.RGBA, fontPath, faceName, char string, ink float64) {
 	dx := n.Dx()/2 - (b.Min.X+b.Max.X)/2
 	dy := n.Dy()/2 - (b.Min.Y+b.Max.Y)/2 - n.Dy()/100
 
-	layer := image.NewRGBA(n)
-	draw.DrawMask(layer, n, image.NewUniform(color.NRGBA{0xff, 0xff, 0xff, 0xff}), image.Point{}, mask, image.Point{}, draw.Over)
-	draw.Draw(dst, n, shifted(layer, dx, dy), image.Point{}, draw.Over)
+	// 字的 alpha 落到整张画布上，投影和字本身都从它来。
+	glyph := image.NewAlpha(n)
+	draw.DrawMask(glyph, n.Add(image.Pt(dx, dy)), image.NewUniform(color.Alpha{0xff}),
+		image.Point{}, mask, image.Point{}, draw.Over)
+
+	if shadowAlpha > 0 {
+		// 投影分两层：贴字的一层紧、外圈一层散，叠起来才不会像把字复制了一份。
+		// 半径都按画布比例走，4 倍超采样画布和最终的 1024 看起来是同一层。
+		h := float64(n.Dy())
+		shade := func(a float64) color.NRGBA {
+			return color.NRGBA{0x00, 0x0c, 0x38, uint8(math.Round(shadowAlpha * a))}
+		}
+		paint(dst, shade(0.55), blur(glyph, 0.042*h, 3), 0, int(math.Round(0.013*h)))
+		paint(dst, shade(0.75), blur(glyph, 0.011*h, 2), 0, int(math.Round(0.006*h)))
+	}
+
+	draw.DrawMask(dst, n, image.NewUniform(color.NRGBA{0xff, 0xff, 0xff, 0xff}),
+		image.Point{}, glyph, image.Point{}, draw.Over)
 }
 
 // renderChar 在给定字号下把字画成 alpha 蒙版，字大致落在画布中央，
@@ -229,70 +228,6 @@ func roundedRect(n int, inset, end, r float64) *image.Alpha {
 	return m
 }
 
-// gradient 生成沿 (dx, dy) 从 a 到 b 的线性渐变，范围是 [lo, hi] 的方块。
-func gradient(n int, a, b color.NRGBA, dx, dy, lo, hi float64) *image.RGBA {
-	l := math.Hypot(dx, dy)
-	dx, dy = dx/l, dy/l
-	proj := func(x, y float64) float64 { return (x-lo)*dx + (y-lo)*dy }
-	minP, maxP := math.Inf(1), math.Inf(-1)
-	for _, c := range [][2]float64{{lo, lo}, {hi, lo}, {lo, hi}, {hi, hi}} {
-		p := proj(c[0], c[1])
-		minP, maxP = math.Min(minP, p), math.Max(maxP, p)
-	}
-
-	g := image.NewRGBA(image.Rect(0, 0, n, n))
-	for y := 0; y < n; y++ {
-		for x := 0; x < n; x++ {
-			t := (proj(float64(x)+0.5, float64(y)+0.5) - minP) / (maxP - minP)
-			t = math.Min(math.Max(t, 0), 1)
-			t = t * t * (3 - 2*t) // smoothstep，两端过渡更柔
-			c := lerp(a, b, t)
-			i := g.PixOffset(x, y)
-			g.Pix[i+0], g.Pix[i+1], g.Pix[i+2], g.Pix[i+3] = c.R, c.G, c.B, 0xff
-		}
-	}
-	return g
-}
-
-// verticalFade 从 y0 的 alpha 渐隐到 y1 的 0；反向则从 0 渐显。
-func verticalFade(n int, y0, y1, alpha float64) *image.Alpha {
-	m := image.NewAlpha(image.Rect(0, 0, n, n))
-	for y := 0; y < n; y++ {
-		f := float64(y) + 0.5
-		t := (f - y0) / (y1 - y0)
-		t = math.Min(math.Max(t, 0), 1)
-		a := alpha * (1 - t*t)
-		for x := 0; x < n; x++ {
-			m.Pix[y*m.Stride+x] = uint8(a)
-		}
-	}
-	return m
-}
-
-// intersect 取两张蒙版里较小的 alpha。
-func intersect(a, b *image.Alpha) *image.Alpha {
-	n := a.Bounds()
-	out := image.NewAlpha(n)
-	for y := 0; y < n.Dy(); y++ {
-		for x := 0; x < n.Dx(); x++ {
-			out.Pix[y*out.Stride+x] = min(a.Pix[y*a.Stride+x], b.Pix[y*b.Stride+x])
-		}
-	}
-	return out
-}
-
-// subtract 返回 a 里挖掉 b 的部分。
-func subtract(a, b *image.Alpha) *image.Alpha {
-	n := a.Bounds()
-	out := image.NewAlpha(n)
-	for y := 0; y < n.Dy(); y++ {
-		for x := 0; x < n.Dx(); x++ {
-			out.Pix[y*out.Stride+x] = uint8(int(a.Pix[y*a.Stride+x]) * (255 - int(b.Pix[y*b.Stride+x])) / 255)
-		}
-	}
-	return out
-}
-
 // parseHex 读 #rrggbb。
 func parseHex(s string) color.NRGBA {
 	var r, g, b uint8
@@ -300,15 +235,6 @@ func parseHex(s string) color.NRGBA {
 		log.Fatalf("颜色 %q 不是 #rrggbb: %v", s, err)
 	}
 	return color.NRGBA{r, g, b, 0xff}
-}
-
-func lerp(a, b color.NRGBA, t float64) color.NRGBA {
-	return color.NRGBA{
-		uint8(float64(a.R) + (float64(b.R)-float64(a.R))*t),
-		uint8(float64(a.G) + (float64(b.G)-float64(a.G))*t),
-		uint8(float64(a.B) + (float64(b.B)-float64(a.B))*t),
-		0xff,
-	}
 }
 
 // paint 把颜色 c 以 mask 的 alpha 叠到 dst 上，可带偏移。

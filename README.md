@@ -26,13 +26,14 @@ go test ./...        # 跑测试
 
 ## 图标
 
-`resources/icon.png` 是 1024×1024 的图：一块蓝色圆角方，中间一个白色的宋体「译」。方块按 macOS 的图标网格画（824 居中、圆角 185），`mygo build` 会把它编成 `.icns` 放进 `.app`，也是 dmg 的卷图标。
+`resources/icon.png` 是 1024×1024 的图：一块纯色蓝（`#2b60d3`）的圆角方，中间一个白色的宋体「译」。底色是平的，没有渐变也没有高光；字下方压着一层柔和的投影（贴字紧、外圈散，共两层）。方块按 macOS 的图标网格画（824 居中、圆角 185），`mygo build` 会把它编成 `.icns` 放进 `.app`，也是 dmg 的卷图标。
 
 图是代码画出来的，不是手工导出的，改了要重跑：
 
 ```bash
-go run ./tools/icongen                        # 写 resources/icon.png
-go run ./tools/icongen -ink 0.40 -top '#3f83ff' -bottom '#0a2f9e'
+go run ./tools/icongen                            # 写 resources/icon.png
+go run ./tools/icongen -bg '#1f6feb'              # 换底色
+go run ./tools/icongen -ink 0.40 -tshadow 0       # 字放大一点、去掉字投影
 ```
 
 字形取自系统的 Songti SC（`/System/Library/Fonts/Supplemental/Songti.ttc`），`-face` 换字重、`-char` 换字。为了小尺寸下笔画不糊，字重用的是 Bold，字按墨迹外接框居中而不是按字身框。
