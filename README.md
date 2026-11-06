@@ -1,10 +1,8 @@
 # MyGo 翻译
 
-把 [Codex Switch](../codex-switch) 里那个翻译弹窗单独拿出来，用 [MyGo](https://github.com/egoist/mygo) 的原生 UI 重写的桌面应用：Go 画界面，没有 WebView，没有 HTML / JavaScript，也没有前端构建。
+用 [MyGo](https://github.com/egoist/mygo) 的原生 UI 写的桌面应用：Go 画界面，没有 WebView，没有 HTML / JavaScript，也没有前端构建。
 
 ![翻译完成](docs/translated.png)
-
-翻译中是另一副样子：进度条、`x/y 段`、取消按钮，`docs/translating.png` 是那个状态。
 
 ## 功能
 
@@ -52,27 +50,8 @@ internal/ocr          macOS Vision 图片识字（经 osascript 的 JXA 桥，�
 tools/icongen         画应用图标：超采样 + Songti 字形，纯 Go
 ```
 
-## 从 Codex Switch 搬过来的东西
-
-| 原实现（src/App.tsx） | 这里 |
-| --- | --- |
-| `splitTranslationText` / `nextTranslationChunkLength` | `translate.Split`，按 rune 计数，切点顺序：空行 → 句末标点 → 换行 → 空格 → 硬切 |
-| `requestGoogle`（两个端点依次尝试） | `Client.requestGoogle` |
-| `requestMyMemory`（450 字符一段、`auto` 按文字猜源语言） | `Client.requestMyMemory`、`guessMyMemorySource` |
-| `translateChunkWithRetry`（3 次、指数退避、保留首尾空白） | `Client.translateChunk` |
-| `translateChunks`（并发 2、按段号回填、语言按长度投票） | `Client.Translate` |
-| Tauri 命令 `ocr_image`（macOS Vision） | `internal/ocr`，同一套语言列表 |
-| 弹窗里的状态文案与按钮 | 底部状态行：进度、重试、字符数与段数 |
-
 ## 两个踩过的坑
 
 **HTTP/2 会被 Google 当成机器人。** 同一份请求，用 Go 1.27 默认的 HTTP/2 客户端发出去，`translate.googleapis.com` 一律回 429 的 "Sorry..." 页面（TLS 指纹问题）；走 HTTP/1.1 就正常。整个应用只跟翻译接口说话，所以 `main.go` 里用 `//go:debug http2client=0` 一次性关掉 HTTP/2 客户端。这是编译期指令，删掉它翻译会退化成只用 MyMemory。
 
 **图片识别不引入 cgo。** MyGo 的应用要求 `CGO_ENABLED=0`，所以没有链接 Vision.framework，而是把 PNG 写到临时文件，用 `osascript -l JavaScript` 通过 ObjC 桥跑一次 `VNRecognizeTextRequest`，再把 JSON 读回来。一次约 0.6 秒，不需要用户安装任何东西。非 macOS 平台按钮不可用。
-
-## 已知取舍
-
-- 只做了翻译这一件事，没有保留配置切换、托盘、多窗口
-- 译文框只读；编辑原文或切换语言会清掉上一次的译文（与原实现一致）
-- 图片识别只认 macOS；Windows / Linux 上按钮会灰掉
-- Google / MyMemory 都是免费接口，量大时会被限流，应用会退避重试并提示
